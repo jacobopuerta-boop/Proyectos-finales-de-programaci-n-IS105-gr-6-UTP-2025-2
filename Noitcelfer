@@ -1,0 +1,184 @@
+#lang racket
+
+(require 2htdp/universe)
+(require 2htdp/image)
+
+(define ANCHO 800)
+(define ALTO 600)
+(define MITAD (/ ALTO 2))
+(define GRAVEDAD 0.8)
+(define VELOCIDAD-SALTO -15)
+(define VELOCIDAD-MOVIMIENTO 6)
+
+(struct jugador (x y vx vy en-suelo) #:transparent)
+(struct plataforma (x y ancho visible-arriba) #:transparent)
+
+(struct mundo (jugador plataformas) #:transparent)
+
+(define plataformas-iniciales
+  (list
+   (plataforma 0 270 800 #t)
+   (plataforma 200 180 120 #t)
+   (plataforma 500 150 120 #f)
+   (plataforma 100 100 100 #f)
+   (plataforma 600 80 150 #t)))
+
+(define mundo-inicial
+  (mundo (jugador 100 240 0 0 #f) plataformas-iniciales))
+
+(define (dibujar-personaje opaco)
+  (if opaco
+      (overlay
+       (rectangle 20 30 "solid" (make-color 100 100 100))
+       (rectangle 22 32 "outline" (make-color 80 80 80)))
+      (overlay
+       (rectangle 20 30 "solid" "black")
+       (rectangle 22 32 "outline" "black"))))
+
+(define (dibujar-mundo m)
+  (define j (mundo-jugador m))
+  (define escena (empty-scene ANCHO ALTO "white"))
+  
+  (define escena-con-linea
+    (add-line escena 0 MITAD ANCHO MITAD "black"))
+  
+  (define escena-con-plataformas
+    (dibujar-todas-plataformas (mundo-plataformas m) escena-con-linea))
+  
+  (define y-espejo (+ MITAD (- MITAD (jugador-y j))))
+  
+  (define escena-con-reflejo
+    (place-image
+     (dibujar-personaje #t)
+     (jugador-x j)
+     y-espejo
+     escena-con-plataformas))
+  
+  (place-image
+   (dibujar-personaje #f)
+   (jugador-x j)
+   (jugador-y j)
+   escena-con-reflejo))
+
+(define (dibujar-todas-plataformas plats escena)
+  (if (empty? plats)
+      escena
+      (dibujar-todas-plataformas
+       (rest plats)
+       (dibujar-plataforma-doble (first plats) escena))))
+
+(define (dibujar-plataforma-doble p escena)
+  (define img-real (overlay
+                    (rectangle (plataforma-ancho p) 15 "solid" "black")
+                    (rectangle (+ (plataforma-ancho p) 2) 17 "outline" "black")))
+  (define img-espejo (overlay
+                      (rectangle (plataforma-ancho p) 15 "solid" (make-color 150 150 150))
+                      (rectangle (+ (plataforma-ancho p) 2) 17 "outline" (make-color 120 120 120))))
+  (define y-real (plataforma-y p))
+  (define y-espejo (+ MITAD (- MITAD y-real)))
+  
+  (define escena-con-espejo
+    (place-image img-espejo
+                (+ (plataforma-x p) (/ (plataforma-ancho p) 2))
+                y-espejo
+                escena))
+  
+  (if (plataforma-visible-arriba p)
+      (place-image img-real
+                  (+ (plataforma-x p) (/ (plataforma-ancho p) 2))
+                  y-real
+                  escena-con-espejo)
+      escena-con-espejo))
+
+(define (colision-plataforma? j p)
+  (and (>= (jugador-x j) (plataforma-x p))
+       (<= (jugador-x j) (+ (plataforma-x p) (plataforma-ancho p)))))
+
+(define (colision-desde-arriba? j p)
+  (and (colision-plataforma? j p)
+       (>= (jugador-vy j) 0)
+       (< (abs (- (+ (jugador-y j) 16) (plataforma-y p))) 18)
+       (< (jugador-y j) (plataforma-y p))))
+
+(define (colision-desde-abajo? j p)
+  (and (colision-plataforma? j p)
+       (<= (jugador-vy j) 0)
+       (< (abs (- (- (jugador-y j) 16) (+ (plataforma-y p) 8))) 18)
+       (> (jugador-y j) (+ (plataforma-y p) 8))))
+
+(define (verificar-colisiones-arriba j plats)
+  (cond
+    [(empty? plats) #f]
+    [(colision-desde-arriba? j (first plats)) (first plats)]
+    [else (verificar-colisiones-arriba j (rest plats))]))
+
+(define (verificar-colisiones-abajo j plats)
+  (cond
+    [(empty? plats) #f]
+    [(colision-desde-abajo? j (first plats)) (first plats)]
+    [else (verificar-colisiones-abajo j (rest plats))]))
+
+(define (actualizar-mundo m)
+  (define j (mundo-jugador m))
+  (define nueva-vy (+ (jugador-vy j) GRAVEDAD))
+  (define nueva-y (+ (jugador-y j) nueva-vy))
+  (define nueva-x (max 12 (min (- ANCHO 12) (+ (jugador-x j) (jugador-vx j)))))
+  
+  (define colision-arriba (verificar-colisiones-arriba
+                           (jugador nueva-x nueva-y 0 nueva-vy #f)
+                           (mundo-plataformas m)))
+  
+  (define colision-abajo (verificar-colisiones-abajo
+                          (jugador nueva-x nueva-y 0 nueva-vy #f)
+                          (mundo-plataformas m)))
+  
+  (cond
+    [colision-arriba
+     (mundo (jugador nueva-x
+                    (- (plataforma-y colision-arriba) 16)
+                    (jugador-vx j)
+                    0
+                    #t)
+            (mundo-plataformas m))]
+    [colision-abajo
+     (mundo (jugador nueva-x
+                    (+ (plataforma-y colision-abajo) 24)
+                    (jugador-vx j)
+                    1
+                    #f)
+            (mundo-plataformas m))]
+    [else
+     (mundo (jugador nueva-x nueva-y (jugador-vx j) nueva-vy #f)
+            (mundo-plataformas m))]))
+
+(define (manejar-tecla m tecla)
+  (define j (mundo-jugador m))
+  (cond
+    [(key=? tecla "left")
+     (mundo (jugador (jugador-x j) (jugador-y j)
+                    (- VELOCIDAD-MOVIMIENTO) (jugador-vy j) (jugador-en-suelo j))
+            (mundo-plataformas m))]
+    [(key=? tecla "right")
+     (mundo (jugador (jugador-x j) (jugador-y j)
+                    VELOCIDAD-MOVIMIENTO (jugador-vy j) (jugador-en-suelo j))
+            (mundo-plataformas m))]
+    [(and (key=? tecla "up") (jugador-en-suelo j))
+     (mundo (jugador (jugador-x j) (jugador-y j)
+                    (jugador-vx j) VELOCIDAD-SALTO #f)
+            (mundo-plataformas m))]
+    [else m]))
+
+(define (soltar-tecla m tecla)
+  (define j (mundo-jugador m))
+  (cond
+    [(or (key=? tecla "left") (key=? tecla "right"))
+     (mundo (jugador (jugador-x j) (jugador-y j)
+                    0 (jugador-vy j) (jugador-en-suelo j))
+            (mundo-plataformas m))]
+    [else m]))
+
+(big-bang mundo-inicial
+  [to-draw dibujar-mundo]
+  [on-tick actualizar-mundo]
+  [on-key manejar-tecla]
+  [on-release soltar-tecla])
